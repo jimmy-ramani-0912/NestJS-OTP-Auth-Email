@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { User } from './entities/user.entity';
 import * as bcrypt from 'bcrypt';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class UsersService {
@@ -29,7 +30,8 @@ export class UsersService {
     return null;
   }
 
-  async resetPassword(token: string, newPassword: string) {
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const { newPassword, token } = resetPasswordDto;
     const user = await this.usersRepository.findOne({
       where: {
         resetPasswordToken: token,

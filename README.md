@@ -139,7 +139,7 @@ nest generate controller users
 
 > Define User Entity:
 
-In src/users/user.entity.ts, define your user entity:
+define your user entity:
 
 ```
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
@@ -246,15 +246,53 @@ import { JwtStrategy } from './jwt.strategy';
 export class AuthModule {}
 ```
 
-> 5. Implement Auth Service:
+> 5. Implement Login & Registration Dto:
+
+Login Dto :
+
+```
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class LoginDto {
+  @IsString()
+  @IsNotEmpty()
+  email: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  password: string;
+}
+```
+
+Registration Dto :
+
+```
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class RegistrationDto {
+  @IsString()
+  @IsNotEmpty()
+  email: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  password: string;
+}
+```
+
+> 6. Implement Auth Service:
 
 implement the authentication logic:
 
 ```
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import * as bcrypt from 'bcrypt';
+import { LoginDto } from './dto/login.dto';
+import { RegistrationDto } from './dto/registration.dto';
 
 @Injectable()
 export class AuthService {
@@ -272,15 +310,21 @@ export class AuthService {
     return null;
   }
 
-  async login(user: any) {
+  async login(loginDto: LoginDto) {
+    const { email, password } = loginDto;
+    const user = await this.validateUser(email, password);
+    if (!user) {
+      throw new UnauthorizedException();
+    }
     const payload = { username: user.email, sub: user.id };
     return {
       access_token: this.jwtService.sign(payload),
     };
   }
 
-  async register(email: string, pass: string): Promise<any> {
-    const hashedPassword = bcrypt.hashSync(pass, 10);
+  async register(registerUserDto: RegistrationDto) {
+    const { password, email } = registerUserDto;
+    const hashedPassword = bcrypt.hashSync(password, 10);
     return this.usersService.create({
       email,
       password: hashedPassword,
@@ -294,26 +338,84 @@ export class AuthService {
 add endpoints for login and register:
 
 ```
-import { Controller, Request, Post, UseGuards, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { LoginDto } from './dto/login.dto';
+import { RegistrationDto } from './dto/registration.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() body: any) {
-    return this.authService.login(body);
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto);
   }
 
   @Post('register')
-  async register(@Body() body: any) {
-    return this.authService.register(body.email, body.password);
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  async register(@Body() registrationDto: RegistrationDto) {
+    return this.authService.register(registrationDto);
   }
 }
 ```
 
 ## STEP 5 : Implementing Forgot Password and Reset Password
+
+> 5. Implement Create User, Forget Passoword & Reset Passoword Dto:
+
+Create User Dto :
+
+```
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class CreateUserDto {
+  @IsString()
+  @IsNotEmpty()
+  username: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  password: string;
+}
+```
+
+Forget Passoword Dto :
+
+```
+import { IsEmail, IsNotEmpty } from 'class-validator';
+
+export class ForgotPasswordDto {
+  @IsEmail()
+  @IsNotEmpty()
+  email: string;
+}
+```
+
+Reset Passoword Dto :
+
+```
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class ResetPasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  newPassword: string;
+
+  @IsString()
+  @IsNotEmpty()
+  token: string;
+}
+```
 
 > 1. Add Forgot Password Method in Users Service:
 
@@ -323,6 +425,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { User } from './entities/user.entity';
 import * as bcrypt from 'bcrypt';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class UsersService {
@@ -332,7 +435,7 @@ export class UsersService {
   ) {}
 
   async findOneByEmail(email: string): Promise<User | undefined> {
-    return this.usersRepository.findOne({ email });
+    return this.usersRepository.findOne({ where: { email } });
   }
 
   async create(user: Partial<User>): Promise<User> {
@@ -349,7 +452,8 @@ export class UsersService {
     return null;
   }
 
-  async resetPassword(token: string, newPassword: string) {
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const { newPassword, token } = resetPasswordDto;
     const user = await this.usersRepository.findOne({
       where: {
         resetPasswordToken: token,
@@ -372,32 +476,44 @@ export class UsersService {
 add endpoints for forgot and reset password:
 
 ```
-import { Controller, Post, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
 import * as crypto from 'crypto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ForgotPasswordDto } from './dto/forget-password.dto';
 
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
   @Post('forgot-password')
-  async forgotPassword(@Body('email') email: string) {
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    const { email } = forgotPasswordDto;
     const token = crypto.randomBytes(20).toString('hex');
     const expires = new Date();
     expires.setHours(expires.getHours() + 1); // Token expires in 1 hour
-    const user = await this.usersService.setResetPasswordToken(email, token, expires);
+    const user = await this.usersService.setResetPasswordToken(
+      email,
+      token,
+      expires,
+    );
     if (user) {
-      // Send token to user's email
-      // await this.mailService.sendResetPasswordMail(email, token);
       return { reset_token: token };
     }
     return { message: 'If email exists, reset token has been sent' };
   }
 
   @Post('reset-password')
-  async resetPassword(@Body() body: any) {
-    const { token, newPassword } = body;
-    const user = await this.usersService.resetPassword(token, newPassword);
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+    const user = await this.usersService.resetPassword(resetPasswordDto);
     if (user) {
       return { message: 'Password successfully reset' };
     }
