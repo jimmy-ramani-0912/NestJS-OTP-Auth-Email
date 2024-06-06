@@ -56,6 +56,7 @@ POSTGRES_PORT=5432
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=jimmy@246
 POSTGRES_DB=crud-rest-api
+JWT_SECRET='my-name-is-jimmy-ramani'
 ```
 
 - create an typeormconfig.ts file to configure TypeORM with PostgreSQL
@@ -98,11 +99,14 @@ export const connectionSource = new DataSource(config as DataSourceOptions);
 
 - To add the typeorm.ts into the main root module, which is mostly named as app.module.ts
 
-```import { Module } from '@nestjs/common';
+```
+import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { UsersModule } from './users/users.module';
+import { AuthModule } from './auth/auth.module';
 import typeorm from './config/typeormconfig';
 
 @Module({
@@ -116,6 +120,8 @@ import typeorm from './config/typeormconfig';
       useFactory: async (configService: ConfigService) =>
         configService.get('typeorm'),
     }),
+    AuthModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
@@ -201,14 +207,16 @@ configure the JWT strategy
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { config as dotenvConfig } from 'dotenv';
 
+dotenvConfig({ path: '.env' });
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: 'your_jwt_secret_key',
+      secretOrKey: `${process.env.JWT_SECRET}`,
     });
   }
 
@@ -227,15 +235,19 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
-import { JwtStrategy } from './jwt.strategy';
+import { JwtStrategy } from './strategy/jwt.strategy';
+import { config as dotenvConfig } from 'dotenv';
+
+dotenvConfig({ path: '.env' });
 
 @Module({
   imports: [
     UsersModule,
     PassportModule,
     JwtModule.register({
-      secret: 'your_jwt_secret_key',
+      secret: `${process.env.JWT_SECRET}`,
       signOptions: { expiresIn: '60m' },
     }),
   ],
@@ -287,7 +299,12 @@ export class RegistrationDto {
 implement the authentication logic:
 
 ```
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import * as bcrypt from 'bcrypt';
@@ -303,37 +320,49 @@ export class AuthService {
 
   async validateUser(email: string, pass: string): Promise<any> {
     const user = await this.usersService.findOneByEmail(email);
-    if (user && bcrypt.compareSync(pass, user.password)) {
-      const { password, ...result } = user;
-      return result;
+    if (!user) {
+      throw new NotFoundException('Email not found');
     }
-    return null;
+    if (!bcrypt.compareSync(pass, user.password)) {
+      throw new BadRequestException('Incorrect password');
+    }
+    const { password, ...result } = user;
+    return result;
   }
 
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
     const user = await this.validateUser(email, password);
-    if (!user) {
-      throw new UnauthorizedException();
-    }
     const payload = { username: user.email, sub: user.id };
     return {
+      user,
       access_token: this.jwtService.sign(payload),
     };
   }
 
   async register(registerUserDto: RegistrationDto) {
     const { password, email } = registerUserDto;
+    const existingUser = await this.usersService.findOneByEmail(email);
+    if (existingUser) {
+      throw new ConflictException('Email already exists');
+    }
     const hashedPassword = bcrypt.hashSync(password, 10);
-    return this.usersService.create({
+    const newUser = await this.usersService.create({
       email,
       password: hashedPassword,
     });
+
+    const payload = { username: newUser.email, sub: newUser.id };
+    return {
+      user: newUser,
+      access_token: this.jwtService.sign(payload),
+    };
   }
 }
+
 ```
 
-> 6. Add Login and Register Endpoints:
+> 7. Add Login and Register Endpoints:
 
 add endpoints for login and register:
 
@@ -356,20 +385,28 @@ export class AuthController {
   @Post('login')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+    const result = await this.authService.login(loginDto);
+    return {
+      message: 'Login successful',
+      ...result,
+    };
   }
 
   @Post('register')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async register(@Body() registrationDto: RegistrationDto) {
-    return this.authService.register(registrationDto);
+    const result = await this.authService.register(registrationDto);
+    return {
+      message: 'Registration successful',
+      ...result,
+    };
   }
 }
 ```
 
 ## STEP 5 : Implementing Forgot Password and Reset Password
 
-> 5. Implement Create User, Forget Passoword & Reset Passoword Dto:
+> 1. Implement Create User, Forget Passoword & Reset Passoword Dto:
 
 Create User Dto :
 
@@ -417,14 +454,48 @@ export class ResetPasswordDto {
 }
 ```
 
-> 1. Add Forgot Password Method in Users Service:
+> 2. configure the users module:
 
 ```
-import { Injectable } from '@nestjs/common';
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { UsersService } from './users.service';
+import { UsersController } from './users.controller';
+import { User } from './entities/user.entity';
+import { JwtModule } from '@nestjs/jwt';
+import { config as dotenvConfig } from 'dotenv';
+
+dotenvConfig({ path: '.env' });
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([User]),
+    JwtModule.register({
+      secret: `${process.env.JWT_SECRET}`,
+      signOptions: { expiresIn: '1h' },
+    }),
+  ],
+  providers: [UsersService],
+  controllers: [UsersController],
+  exports: [UsersService],
+})
+export class UsersModule {}
+```
+
+> 3. Add Forgot Password Method in Users Service:
+
+```
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import * as bcrypt from 'bcrypt';
+import { JwtService } from '@nestjs/jwt';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
@@ -432,6 +503,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    private jwtService: JwtService,
   ) {}
 
   async findOneByEmail(email: string): Promise<User | undefined> {
@@ -439,7 +511,8 @@ export class UsersService {
   }
 
   async create(user: Partial<User>): Promise<User> {
-    return this.usersRepository.save(user);
+    const newUser = this.usersRepository.create(user);
+    return this.usersRepository.save(newUser);
   }
 
   async setResetPasswordToken(email: string, token: string, expires: Date) {
@@ -454,24 +527,28 @@ export class UsersService {
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const { newPassword, token } = resetPasswordDto;
-    const user = await this.usersRepository.findOne({
-      where: {
-        resetPasswordToken: token,
-        resetPasswordExpires: MoreThan(new Date()),
-      },
-    });
-    if (user) {
+    try {
+      const decoded = this.jwtService.verify(token);
+      const user = await this.findOneByEmail(decoded.email);
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+      if (user.resetPasswordToken !== token) {
+        throw new ForbiddenException('Invalid reset token');
+      }
+      if (user.resetPasswordExpires < new Date()) {
+        throw new BadRequestException('Reset token has expired');
+      }
       user.password = bcrypt.hashSync(newPassword, 10);
-      user.resetPasswordToken = null;
-      user.resetPasswordExpires = null;
       return this.usersRepository.save(user);
+    } catch (error) {
+      return null;
     }
-    return null;
   }
 }
 ```
 
-> 2. Add Forgot Password and Reset Password Endpoints:
+> 4. Add Forgot Password and Reset Password Endpoints:
 
 add endpoints for forgot and reset password:
 
@@ -482,29 +559,31 @@ import {
   Body,
   UsePipes,
   ValidationPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import * as crypto from 'crypto';
+import { JwtService } from '@nestjs/jwt';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forget-password.dto';
 
 @Controller('users')
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService,
+  ) {}
 
   @Post('forgot-password')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
     const { email } = forgotPasswordDto;
-    const token = crypto.randomBytes(20).toString('hex');
-    const expires = new Date();
-    expires.setHours(expires.getHours() + 1); // Token expires in 1 hour
-    const user = await this.usersService.setResetPasswordToken(
-      email,
-      token,
-      expires,
-    );
+    const user = await this.usersService.findOneByEmail(email);
     if (user) {
+      const payload = { email: user.email, sub: user.id };
+      const token = this.jwtService.sign(payload, { expiresIn: '1h' });
+      const expires = new Date();
+      expires.setHours(expires.getHours() + 1);
+      await this.usersService.setResetPasswordToken(email, token, expires);
       return { reset_token: token };
     }
     return { message: 'If email exists, reset token has been sent' };
@@ -517,7 +596,7 @@ export class UsersController {
     if (user) {
       return { message: 'Password successfully reset' };
     }
-    return { message: 'Invalid or expired token' };
+    throw new BadRequestException('Invalid or expired token');
   }
 }
 ```
@@ -526,6 +605,6 @@ export class UsersController {
 
 <img alt="Login User" src="public/images/login.png">
 
-<img alt="Forget Password" src="public/images/forget-password.png">
+<img alt="Forget Password" src="public/images/forgot-password.png">
 
 <img alt="Reset Password" src="public/images/reset-password.png">

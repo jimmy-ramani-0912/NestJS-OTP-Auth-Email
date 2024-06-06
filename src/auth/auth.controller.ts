@@ -16,12 +16,20 @@ export class AuthController {
   @Post('login')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+    const result = await this.authService.login(loginDto);
+    return {
+      message: 'Login successful',
+      ...result,
+    };
   }
 
   @Post('register')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async register(@Body() registrationDto: RegistrationDto) {
-    return this.authService.register(registrationDto);
+    const result = await this.authService.register(registrationDto);
+    return {
+      message: 'Registration successful',
+      ...result,
+    };
   }
 }

@@ -4,29 +4,31 @@ import {
   Body,
   UsePipes,
   ValidationPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import * as crypto from 'crypto';
+import { JwtService } from '@nestjs/jwt';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forget-password.dto';
 
 @Controller('users')
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService,
+  ) {}
 
   @Post('forgot-password')
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
     const { email } = forgotPasswordDto;
-    const token = crypto.randomBytes(20).toString('hex');
-    const expires = new Date();
-    expires.setHours(expires.getHours() + 1); // Token expires in 1 hour
-    const user = await this.usersService.setResetPasswordToken(
-      email,
-      token,
-      expires,
-    );
+    const user = await this.usersService.findOneByEmail(email);
     if (user) {
+      const payload = { email: user.email, sub: user.id };
+      const token = this.jwtService.sign(payload, { expiresIn: '1h' });
+      const expires = new Date();
+      expires.setHours(expires.getHours() + 1);
+      await this.usersService.setResetPasswordToken(email, token, expires);
       return { reset_token: token };
     }
     return { message: 'If email exists, reset token has been sent' };
@@ -39,6 +41,6 @@ export class UsersController {
     if (user) {
       return { message: 'Password successfully reset' };
     }
-    return { message: 'Invalid or expired token' };
+    throw new BadRequestException('Invalid or expired token');
   }
 }
