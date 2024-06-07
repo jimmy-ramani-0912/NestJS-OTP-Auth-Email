@@ -6,12 +6,14 @@ import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
 import { JwtStrategy } from './strategy/jwt.strategy';
 import { config as dotenvConfig } from 'dotenv';
+import { OtpModule } from 'src/otp/otp.module';
 
 dotenvConfig({ path: '.env' });
 
 @Module({
   imports: [
     UsersModule,
+    OtpModule,
     PassportModule,
     JwtModule.register({
       secret: `${process.env.JWT_SECRET}`,

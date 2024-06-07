@@ -1,4 +1,10 @@
-import { IsEmail, IsNotEmpty, Matches, MinLength } from 'class-validator';
+import {
+  IsString,
+  IsEmail,
+  IsNotEmpty,
+  Matches,
+  MinLength,
+} from 'class-validator';
 
 export class RegistrationDto {
   @IsEmail()
@@ -15,4 +21,7 @@ export class RegistrationDto {
     },
   )
   password: string;
+
+  @IsString()
+  otpToken: string;
 }

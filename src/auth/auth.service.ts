@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
+import { OtpService } from '../otp/otp.service';
 import * as bcrypt from 'bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RegistrationDto } from './dto/registration.dto';
@@ -15,6 +16,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
+    private otpService: OtpService,
   ) {}
 
   async validateUser(email: string, pass: string): Promise<any> {
@@ -22,7 +24,8 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException('Email not found');
     }
-    if (!bcrypt.compareSync(pass, user.password)) {
+    const isMatch = await bcrypt.compare(pass, user.password);
+    if (!isMatch) {
       throw new BadRequestException('Incorrect password');
     }
     const { password, ...result } = user;
@@ -40,12 +43,19 @@ export class AuthService {
   }
 
   async register(registerUserDto: RegistrationDto) {
-    const { password, email } = registerUserDto;
+    const { password, email, otpToken } = registerUserDto;
     const existingUser = await this.usersService.findOneByEmail(email);
     if (existingUser) {
       throw new ConflictException('Email already exists');
     }
-    const hashedPassword = bcrypt.hashSync(password, 10);
+
+    try {
+      this.jwtService.verify(otpToken);
+    } catch (e) {
+      throw new BadRequestException('Invalid or expired OTP token');
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = await this.usersService.create({
       email,
       password: hashedPassword,
